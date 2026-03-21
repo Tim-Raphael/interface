@@ -1,0 +1,15 @@
+[package]
+name = "interface-derive"
+description = "Derive macro for typed, lossy-aware interface translation between API versions"
+authors = ["Tim Spamer <mail@tim-raphael.dev>"]
+version = "0.0.1"
+repository = "https://github.com/tim-raphael/interface"
+documentation = "https://docs.rs/interface-derive"
+edition = "2024"
+readme = "README.md"
+license = "MIT"
+
+[lib]
+proc-macro = true
+
+[dependencies]

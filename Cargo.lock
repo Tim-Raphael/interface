@@ -5,3 +5,7 @@ version = 4
 [[package]]
 name = "interface"
 version = "0.0.1"
+
+[[package]]
+name = "interface-derive"
+version = "0.0.1"
