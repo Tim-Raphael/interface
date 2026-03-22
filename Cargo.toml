@@ -1,2 +1,4 @@
+
 [workspace]
+resolver = "3"
 members = ["crates/interface", "crates/interface-derive"]
