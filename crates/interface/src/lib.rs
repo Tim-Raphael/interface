@@ -3,47 +3,60 @@ use std::{
     marker::PhantomData,
 };
 
-pub trait Relation {}
+pub trait Lossiness {}
 
 #[derive(Debug, Clone)]
 pub struct Lossy;
 
-impl Relation for Lossy {}
+impl Lossiness for Lossy {}
 
 #[derive(Debug, Clone)]
 pub struct Lossless;
 
-impl Relation for Lossless {}
+impl Lossiness for Lossless {}
 
-#[derive(Debug, Clone)]
-pub struct Translation<Source, Target, Relation> {
+pub struct Translation<Source, Target, Lossiness> {
     source: Source,
-    target: Target,
-    _relation: PhantomData<Relation>,
+    construct_target: Box<dyn FnOnce(Source) -> Target>,
+    diff: Diff,
+    _lossiness: PhantomData<Lossiness>,
 }
 
-impl<S, T, R> Translation<S, T, R>
+impl<S, T, L> Translation<S, T, L>
 where
-    R: Relation,
+    L: Lossiness,
 {
-    pub fn new(source: S, target: T) -> Self {
+    pub fn new(source: S, construct_target: Box<dyn FnOnce(S) -> T>, diff: Diff) -> Self {
         Self {
             source,
-            target,
-            _relation: PhantomData,
+            construct_target,
+            diff,
+            _lossiness: PhantomData,
         }
     }
 
-    pub fn source(&self) -> &S {
-        &self.source
+    pub fn diff(&self) -> &Diff {
+        &self.diff
+    }
+}
+
+impl<S, T> Translation<S, T, Lossless> {
+    pub const fn is_lossy(&self) -> bool {
+        false
     }
 
-    pub fn target(&self) -> &T {
-        &self.target
+    pub fn translate(self) -> T {
+        (self.construct_target)(self.source)
+    }
+}
+
+impl<S, T> Translation<S, T, Lossy> {
+    pub const fn is_lossy(&self) -> bool {
+        true
     }
 
-    fn diff(&self) -> Diff<'_, S, T> {
-        self.into()
+    pub fn translate_lossy(self) -> T {
+        (self.construct_target)(self.source)
     }
 }
 
@@ -53,7 +66,7 @@ where
     S: Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "The translation was lossy:\n\n{}", self.diff())
+        write!(f, "The translation was lossy:\n{}", self.diff())
     }
 }
 
@@ -63,35 +76,52 @@ where
     S: Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "The translation was lossless:\n\n{}", self.diff())
+        write!(f, "The translation was lossless:\n{}", self.diff())
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct Diff<'a, Left, Right> {
-    left: &'a Left,
-    right: &'a Right,
-}
+pub struct Diff(String);
 
-impl<'a, S, T, R> From<&'a Translation<S, T, R>> for Diff<'a, S, T>
-where
-    R: Relation,
-{
-    fn from(value: &'a Translation<S, T, R>) -> Self {
-        Self {
-            left: value.source(),
-            right: value.target(),
-        }
+impl Diff {
+    pub fn new() -> Self {
+        Self(String::new())
+    }
+
+    fn push<V: Debug>(mut self, sign: &str, name: &str, value: V) -> Self {
+        let formatted = format!("{:#?}", value);
+        let prefixed = formatted
+            .lines()
+            .enumerate()
+            .map(|(i, line)| {
+                if i == 0 {
+                    format!("{line}")
+                } else {
+                    format!("{sign}{line}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        self.0.push_str(&format!("{sign}{name}: {prefixed}\n"));
+
+        self
+    }
+
+    pub fn add<V: Debug>(self, name: &str, value: V) -> Self {
+        const ADD: &str = "+";
+        self.push(ADD, name, value)
+    }
+
+    pub fn sub<V: Debug>(self, name: &str, value: V) -> Self {
+        const SUB: &str = "-";
+        self.push(SUB, name, value)
     }
 }
 
-impl<L, R> Display for Diff<'_, L, R>
-where
-    L: Debug,
-    R: Debug,
-{
+impl Display for Diff {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:#?}\n{:#?}", self.left, self.right)
+        write!(f, "{}", self.0)
     }
 }
 
@@ -99,18 +129,18 @@ pub trait Upgrade<Next>
 where
     Self: Sized,
 {
-    type Relation;
+    type Lossiness;
 
-    fn upgrade(self) -> Translation<Self, Next, Self::Relation>;
+    fn upgrade(self) -> Translation<Self, Next, Self::Lossiness>;
 }
 
 pub trait Downgrade<Prev>
 where
     Self: Sized,
 {
-    type Relation;
+    type Lossiness;
 
-    fn downgrade(self) -> Translation<Self, Prev, Self::Relation>;
+    fn downgrade(self) -> Translation<Self, Prev, Self::Lossiness>;
 }
 
 #[cfg(test)]
@@ -120,7 +150,7 @@ mod tests {
     mod v1 {
         use super::*;
 
-        #[derive(Debug)]
+        #[derive(Debug, PartialEq, Eq)]
         pub struct User {
             name: String,
         }
@@ -131,14 +161,17 @@ mod tests {
             }
         }
 
-        impl Upgrade<v2::User> for User {
-            type Relation = Lossless;
+        impl<'a> Upgrade<v2::User> for User {
+            type Lossiness = Lossless;
 
-            fn upgrade(self) -> Translation<Self, v2::User, Self::Relation> {
-                let name = v2::Name::from(self.name.clone());
-                let email = v2::Email::default();
-                let v2_user = v2::User::new(name, email);
-                Translation::new(self, v2_user)
+            fn upgrade(self) -> Translation<Self, v2::User, Self::Lossiness> {
+                let diff = Diff::new().add("email", v2::Email::default());
+
+                let construct_target = Box::from(|s: Self| -> v2::User {
+                    v2::User::new(v2::Name::from(s.name), v2::Email::default())
+                });
+
+                Translation::new(self, construct_target, diff)
             }
         }
     }
@@ -146,7 +179,7 @@ mod tests {
     mod v2 {
         use super::*;
 
-        #[derive(Debug)]
+        #[derive(Debug, PartialEq, Eq)]
         pub struct Name(String);
 
         impl From<String> for Name {
@@ -155,8 +188,14 @@ mod tests {
             }
         }
 
-        #[derive(Debug)]
+        #[derive(Debug, PartialEq, Eq)]
         pub struct Email(String);
+
+        impl From<String> for Email {
+            fn from(value: String) -> Self {
+                Self(value)
+            }
+        }
 
         impl Default for Email {
             fn default() -> Self {
@@ -164,7 +203,7 @@ mod tests {
             }
         }
 
-        #[derive(Debug)]
+        #[derive(Debug, PartialEq, Eq)]
         pub struct User {
             name: Name,
             email: Email,
@@ -175,11 +214,44 @@ mod tests {
                 Self { name, email }
             }
         }
+
+        impl<'a> Downgrade<v1::User> for User {
+            type Lossiness = Lossy;
+
+            fn downgrade(self) -> Translation<Self, v1::User, Self::Lossiness> {
+                let diff = Diff::new().sub("email", &self.email);
+
+                let construct_target = Box::from(|s: Self| -> v1::User { v1::User::new(s.name.0) });
+
+                Translation::new(self, construct_target, diff)
+            }
+        }
     }
 
     #[test]
     fn upgrade_from_v1_to_v2() {
         let user = v1::User::new("Foo".to_string());
-        println!("{}", user.upgrade());
+        let translation = user.upgrade();
+
+        assert!(!translation.is_lossy());
+        assert_eq!(
+            translation.translate(),
+            v2::User::new(v2::Name::from("Foo".to_string()), v2::Email::default())
+        );
+    }
+
+    #[test]
+    fn downgrade_from_v2_to_v1() {
+        let user = v2::User::new(
+            v2::Name::from("Foo".to_string()),
+            v2::Email::from("Bar".to_string()),
+        );
+        let translation = user.downgrade();
+
+        assert!(translation.is_lossy());
+        assert_eq!(
+            translation.translate_lossy(),
+            v1::User::new("Foo".to_string())
+        );
     }
 }
