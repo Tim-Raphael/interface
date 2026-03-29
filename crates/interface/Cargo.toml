@@ -2,7 +2,7 @@
 name = "interface"
 description = "Typed, lossy-aware interface translation between API versions"
 authors = ["Tim Spamer <mail@tim-raphael.dev>"]
-version = "0.0.2"
+version = "0.0.3"
 repository = "https://github.com/tim-raphael/interface"
 documentation = "https://docs.rs/interface"
 edition = "2024"
