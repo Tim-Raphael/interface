@@ -2,7 +2,7 @@
 name = "interface-derive"
 description = "Derive macro for typed, lossy-aware interface translation between API versions"
 authors = ["Tim Spamer <mail@tim-raphael.dev>"]
-version = "0.0.1"
+version = "0.0.2"
 repository = "https://github.com/tim-raphael/interface"
 documentation = "https://docs.rs/interface-derive"
 edition = "2024"
